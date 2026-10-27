@@ -1,0 +1,15 @@
+# Gedownloade Miro exports en zip-bestanden negeren
+exports/
+*.zip
+
+# Python cache & omgevingen
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# OS & Editor bestanden
+.DS_Store
+Thumbs.db
