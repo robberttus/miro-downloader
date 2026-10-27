@@ -717,33 +717,54 @@ async def extract_miro_board_data(board_id: str) -> dict:
             if "/resources/batch/meta" in response.url and response.status == 200:
                 try:
                     data = await response.json()
-                    if isinstance(data, list):
-                        for item in data:
-                            if isinstance(item, dict) and "id" in item:
-                                resources_meta[str(item["id"])] = item
+                    items_list = (
+                        data.get("data", [])
+                        if isinstance(data, dict)
+                        else (data if isinstance(data, list) else [])
+                    )
+                    for item in items_list:
+                        if isinstance(item, dict) and "id" in item:
+                            resources_meta[str(item["id"])] = item
                 except Exception:
                     pass
 
         page.on("response", handle_response)
 
-        await page.goto(board_url, wait_until="domcontentloaded", timeout=90000)
+        try:
+            await page.goto(board_url, wait_until="networkidle", timeout=60000)
+        except Exception:
+            await page.goto(board_url, wait_until="domcontentloaded", timeout=90000)
 
-        # Wacht tot window.miro.board beschikbaar is en objecten geladen zijn
+        # Wacht tot window.miro.board én het interne objectsRepository geladen zijn
         print("      Wachten tot het Miro canvas en de objecten geladen zijn...")
-        for _ in range(30):
+        for attempt in range(30):
             await page.wait_for_timeout(1000)
-            ready = await page.evaluate("""() => {
-                return Boolean(
+            state = await page.evaluate("""async () => {
+                const hasBoard = Boolean(
                     window.miro &&
                     window.miro.board &&
                     typeof window.miro.board.get === 'function'
                 );
+                const hasRepo = (window.__COMPONENTS || []).some(
+                    c => c && c.widget && c.widget.objectsRepository
+                );
+                return { hasBoard, hasRepo };
             }""")
-            if ready:
+            if state.get("hasBoard") and state.get("hasRepo"):
                 break
+            # Als na 6 seconden nog geen enkele image-widget in beeld was, zoom naar de eerste afbeelding
+            if attempt == 6 and state.get("hasBoard") and not state.get("hasRepo"):
+                await page.evaluate("""async () => {
+                    try {
+                        const imgs = await window.miro.board.get({ type: ['image', 'document'] });
+                        if (imgs && imgs.length > 0 && window.miro.board.viewport) {
+                            await window.miro.board.viewport.zoomTo(imgs[0]);
+                        }
+                    } catch (e) {}
+                }""")
 
-        # Geef Miro nog enkele seconden om alle initiële widgets en batch/meta calls te verwerken
-        await page.wait_for_timeout(8000)
+        # Geef Miro nog enkele seconden om alle batch/meta netwerkcalls af te ronden
+        await page.wait_for_timeout(5000)
 
         raw_page_title = await page.title()
         board_title = re.sub(r"\s*-\s*Miro\s*$", "", raw_page_title).strip() or f"Miro_{board_id}"
@@ -757,37 +778,42 @@ async def extract_miro_board_data(board_id: str) -> dict:
                 : [];
 
             let repoObjects = [];
-            for (const comp of (window.__COMPONENTS || [])) {
-                if (comp && comp.widget && comp.widget.objectsRepository &&
-                    typeof comp.widget.objectsRepository.getAllObjects === 'function') {
-                    const allObjs = comp.widget.objectsRepository.getAllObjects();
-                    for (const o of allObjs) {
-                        try {
-                            const d = o.getData ? o.getData() : {};
-                            if (d && d.resource && d.resource.id) {
-                                repoObjects.push({
-                                    id: String(o.id),
-                                    type: String(o.type),
-                                    bounds: o.bounds ? {
-                                        x: o.bounds.x,
-                                        y: o.bounds.y,
-                                        width: o.bounds.width,
-                                        height: o.bounds.height
-                                    } : null,
-                                    scale: o.scale || 1,
-                                    rotation: o.rotation || 0,
-                                    resource: {
-                                        id: String(d.resource.id),
-                                        boardId: d.resource.boardId,
-                                        name: d.resource.name,
-                                        width: d.resource.width,
-                                        height: d.resource.height
-                                    }
-                                });
-                            }
-                        } catch (e) {}
-                    }
-                    break;
+            const validComps = (window.__COMPONENTS || []).filter(
+                c => c && c.widget && c.widget.objectsRepository &&
+                     typeof c.widget.objectsRepository.getAllObjects === 'function'
+            );
+            if (validComps.length > 0) {
+                const allObjs = validComps[0].widget.objectsRepository.getAllObjects();
+                for (const o of allObjs) {
+                    try {
+                        const d = o.getData ? o.getData() : null;
+                        if (d && d.resource && d.resource.id) {
+                            const b = o.bounds;
+                            repoObjects.push({
+                                id: String(o.id || d.resource.id),
+                                type: String(o.widgetType || o.type || ''),
+                                x: o.x || 0,
+                                y: o.y || 0,
+                                width: o.width || 0,
+                                height: o.height || 0,
+                                bounds: b ? {
+                                    x: b.x,
+                                    y: b.y,
+                                    width: b.width,
+                                    height: b.height
+                                } : null,
+                                scale: o.scale || 1,
+                                rotation: o.rotation || 0,
+                                resource: {
+                                    id: String(d.resource.id),
+                                    boardId: d.resource.boardId,
+                                    name: d.resource.name,
+                                    width: d.resource.width,
+                                    height: d.resource.height
+                                }
+                            });
+                        }
+                    } catch (e) {}
                 }
             }
 
@@ -806,9 +832,6 @@ async def extract_miro_board_data(board_id: str) -> dict:
             res_id = str(obj.get("resource", {}).get("id", ""))
             if res_id:
                 all_resource_ids.add(res_id)
-        for item in sdk_items:
-            if item.get("type") in ("image", "document", "preview"):
-                all_resource_ids.add(str(item.get("id", "")))
 
         missing_ids = [rid for rid in all_resource_ids if rid and rid not in resources_meta]
         if missing_ids:
@@ -824,14 +847,40 @@ async def extract_miro_board_data(board_id: str) -> dict:
                                 return await resp.json();
                             }
                         } catch (e) {}
-                        return [];
+                        return {};
                     }""",
                     {"boardId": board_id, "ids": batch},
                 )
-                if isinstance(batch_data, list):
-                    for item in batch_data:
-                        if isinstance(item, dict) and "id" in item:
-                            resources_meta[str(item["id"])] = item
+                items_list = (
+                    batch_data.get("data", [])
+                    if isinstance(batch_data, dict)
+                    else (batch_data if isinstance(batch_data, list) else [])
+                )
+                for item in items_list:
+                    if isinstance(item, dict) and "id" in item:
+                        resources_meta[str(item["id"])] = item
+
+        # Fallback: als een resource wel in repo_objects zit maar niet in resources_meta,
+        # voeg deze dan alsnog toe vanuit de canvas-resource gegevens zodat hij altijd gedownload wordt
+        for obj in repo_objects:
+            res = obj.get("resource") or {}
+            res_id = str(res.get("id") or "")
+            if res_id and res_id not in resources_meta:
+                name = res.get("name") or f"resource_{res_id}.jpg"
+                ext = name.rsplit(".", 1)[-1].lower() if "." in name else "jpg"
+                if len(ext) > 5 or "/" in ext:
+                    ext = "jpg"
+                resources_meta[res_id] = {
+                    "id": res_id,
+                    "name": name,
+                    "meta": {
+                        "width": res.get("width") or 0,
+                        "height": res.get("height") or 0,
+                        "extension": ext,
+                        "filesize": 0,
+                    },
+                    "downloadUrls": {},
+                }
 
         # Bewaar eventuele cookies uit de browser voor het downloaden
         cookies = await context.cookies()
@@ -905,7 +954,9 @@ async def download_all_resources(
                 thumb_path = thumbs_dir / thumb_filename
 
                 download_urls = rdata.get("downloadUrls") or {}
-                lod_url = (download_urls.get("lod") or {}).get("url")
+                lod_url = (download_urls.get("lod") or {}).get("url") or (
+                    download_urls.get("preview") or {}
+                ).get("url")
                 created_url = (download_urls.get("created") or {}).get("url")
 
                 # 1. Download Thumbnail (LOD)
