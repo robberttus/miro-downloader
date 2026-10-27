@@ -7,7 +7,10 @@ Een volledig zelfstandig Python-script (geïnspireerd door [`jolle/miro-export`]
 ### Optie 1: Dubbelklikken (Windows)
 1. Dubbelklik op **`start_downloader.bat`**.
 2. Plak de URL van het publieke Miro-bord (bijv. `https://miro.com/app/board/uXjVEakmNhM=/`) en druk op **Enter**.
-3. Het script downloadt automatisch alle kaders, post-its, teksten, voorvertoningen en originele hoge-resolutie bestanden (afbeeldingen & PDF's) en maakt zowel een map als een `.zip`-bestand aan in de map `exports/`.
+3. Kies de opslaglocatie:
+   - Druk op **Enter** om via een **Windows Verkenner-venster** een map aan te klikken, óf
+   - Plak direct een map-pad (bijv. `C:\Users\robbe\Downloads`).
+4. Het script downloadt automatisch alle kaders, post-its, teksten, voorvertoningen en originele hoge-resolutie bestanden (afbeeldingen & PDF's) en maakt op de gekozen locatie zowel de map als het `.zip`-bestand aan.
 
 ### Optie 2: Via de terminal / PowerShell
 ```powershell

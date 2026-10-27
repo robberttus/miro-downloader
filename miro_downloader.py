@@ -1329,6 +1329,45 @@ async def run_export(url_or_id: str, base_output_dir: Path | None = None, create
     print("=" * 68)
 
 
+def choose_output_directory_interactive() -> Path:
+    """Laat de gebruiker interactief een opslaglocatie kiezen (via pad of Windows Verkenner)."""
+    default_dir = Path.cwd() / "exports"
+    print("\nWaar wil je het Miro-bord en het ZIP-bestand opslaan?")
+    print(f"  - Druk op [Enter] om een map te kiezen via Windows Verkenner")
+    print(f"  - Of plak hier direct een map-pad (bijv. C:\\Users\\robbe\\Downloads)")
+    try:
+        user_input = input("> ").strip().strip('"').strip("'")
+    except EOFError:
+        user_input = ""
+
+    if user_input:
+        return Path(user_input)
+
+    # Open Windows Verkenner map-keuzevenster via tkinter
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        print("Map-keuzevenster openen...")
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        selected = filedialog.askdirectory(
+            title="Kies waar het Miro-bord en het ZIP-bestand opgeslagen moeten worden",
+            initialdir=str(Path.home()),
+        )
+        root.destroy()
+        if selected:
+            chosen = Path(selected)
+            print(f"Gekozen opslaglocatie: {chosen}\n")
+            return chosen
+    except Exception:
+        pass
+
+    print(f"Standaardmap wordt gebruikt: {default_dir}\n")
+    return default_dir
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Download een publiek Miro bord volledig offline inclusief interactieve HTML viewer en ZIP-bestand."
@@ -1353,6 +1392,7 @@ def main():
     args = parser.parse_args()
 
     url = args.url
+    interactive_mode = not bool(url)
     if not url:
         print("=" * 68)
         print("  MIRO BORD OFFLINE DOWNLOADER & HTML VIEWER GENERATOR")
@@ -1366,8 +1406,12 @@ def main():
         print("Geen URL opgegeven. Afgesloten.")
         sys.exit(1)
 
+    output_dir = args.output_dir
+    if output_dir is None and interactive_mode:
+        output_dir = choose_output_directory_interactive()
+
     try:
-        asyncio.run(run_export(url, base_output_dir=args.output_dir, create_zip=not args.no_zip))
+        asyncio.run(run_export(url, base_output_dir=output_dir, create_zip=not args.no_zip))
     except KeyboardInterrupt:
         print("\nDownload geannuleerd door gebruiker.")
         sys.exit(1)
